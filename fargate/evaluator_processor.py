@@ -29,6 +29,7 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
             dynamo_db_question_metrics = DynamoDB(config.get_experiment_question_metrics_table())
             
             key_condition = "experiment_id = :exp_id"
+            expression_values = {":exp_id": experiment_id}
             
             metrics_records = dynamo_db_question_metrics.query(
                 key_condition_expression=key_condition,
