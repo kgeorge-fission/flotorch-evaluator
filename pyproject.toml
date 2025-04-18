@@ -3,7 +3,7 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "flotorch-indexer"
+name = "flotorch-evaluator"
 version = "2.5.0"
 description = "A Python project for FloTorch"
 authors = [
@@ -11,7 +11,7 @@ authors = [
 ]
 license = { text = "MIT" }
 dependencies = [
-    "FloTorch-core==2.7.0"
+    "FloTorch-core==2.8.0"
 ]
 
 [project.optional-dependencies]
