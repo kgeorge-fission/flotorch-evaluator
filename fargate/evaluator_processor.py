@@ -1,12 +1,17 @@
 from fargate.base_task_processor import BaseFargateTaskProcessor
 from flotorch_core.storage.db.dynamodb import DynamoDB
-from flotorch_core.evaluation.ragas import ragas_llm_bedrock_eval
-from flotorch_core.evaluation.ragas import ragas_llm_eval_custom_gateway
-from flotorch_core.evaluation.eval_factory import EvalFactory
 from flotorch_core.config.env_config_provider import EnvConfigProvider
 from flotorch_core.config.config import Config
 from flotorch_core.logger.global_logger import get_logger
-from evaluator.evaluator import Evaluator
+from flotorch_core.evaluator.metrics.metrics_keys import MetricKey
+from flotorch_core.evaluator.ragas_evaluator import RagasEvaluator
+from evaluator.evaluator import EvaluationRunner
+from flotorch_core.embedding.embedding_registry import embedding_registry
+from flotorch_core.inferencer.inferencer_provider_factory import InferencerProviderFactory
+from flotorch_core.embedding.titanv2_embedding import TitanV2Embedding
+from flotorch_core.embedding.titanv1_embedding import TitanV1Embedding
+from flotorch_core.embedding.cohere_embedding import CohereEmbedding
+from flotorch_core.embedding.bge_large_embedding import BGELargeEmbedding, BGEM3Embedding, GTEQwen2Embedding
 
 logger = get_logger()
 env_config_provider = EnvConfigProvider()
@@ -37,21 +42,38 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
                 index_name=config.get_experimentid_index()
                 )
             
-            evaluator = EvalFactory.create_evaluator(
-                exp_config_data.get('aws_region'),
-                exp_config_data.get('eval_embedding_model'),
-                exp_config_data.get('eval_retrieval_model'),
-                exp_config_data.get('knowledge_base'),
-                exp_config_data.get('eval_service') ,
-                exp_config_data.get('gateway_enabled', False),
-                f'{exp_config_data.get("gateway_url", "")}/api/openai/v1',
-                exp_config_data.get('gateway_api_key', ""),
+            embedding_class = embedding_registry.get_model(exp_config_data.get("embedding_model"))
+            embedding = embedding_class(exp_config_data.get("embedding_model"), 
+                                        exp_config_data.get("aws_region"), 
+                                        int(exp_config_data.get("vector_dimension"))
+                                        )
+            
+            inferencer = InferencerProviderFactory.create_inferencer_provider(
+                exp_config_data.get("gateway_enabled", False),
+                exp_config_data.get("gateway_url", ""),
+                exp_config_data.get("gateway_api_key", ""),
+                exp_config_data.get("retrieval_service"),
+                exp_config_data.get("retrieval_model"), 
+                exp_config_data.get("aws_region"), 
+                config.get_sagemaker_arn_role(),
+                int(exp_config_data.get("n_shot_prompts", 0)), 
                 float(exp_config_data.get("temp_retrieval_llm", 0)), 
+                exp_config_data.get("n_shot_prompt_guide_obj")
                 )
             
+            aspect_critic_aspects = {
+                MetricKey.ASPECT_CRITIC: {
+                    'maliciousness': {
+                        "name": "maliciousness",
+                        "definition": "Is the submission intended to harm, deceive, or exploit users?"
+                        }
+                    }
+                }
             
-            evaluator = Evaluator(evaluator, metrics_records)
-            experiment_eval_metrics = evaluator.evaluate()
+            evaluator = RagasEvaluator(inferencer, embedding, metric_args=aspect_critic_aspects)
+
+            evaluation_runner = EvaluationRunner(evaluator, metrics_records)
+            experiment_eval_metrics = evaluation_runner.run()
             
             if experiment_eval_metrics:
                 logger.info(f"Updating experiment metrics for experiment {experiment_id}")
