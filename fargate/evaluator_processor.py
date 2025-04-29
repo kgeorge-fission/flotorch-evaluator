@@ -33,27 +33,25 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
             dynamo_db_experiment = DynamoDB(config.get_experiment_table_name())
             dynamo_db_question_metrics = DynamoDB(config.get_experiment_question_metrics_table())
             
-            key_condition = "experiment_id = :exp_id"
-            expression_values = {":exp_id": experiment_id}
+            metrics_records = dynamo_db_question_metrics.read({"experiment_id": experiment_id})
             
-            metrics_records = dynamo_db_question_metrics.query(
-                key_condition_expression=key_condition,
-                expression_attribute_values=expression_values,
-                index_name=config.get_experimentid_index()
-                )
-            
-            embedding_class = embedding_registry.get_model(exp_config_data.get("embedding_model"))
-            embedding = embedding_class(exp_config_data.get("embedding_model"), 
-                                        exp_config_data.get("aws_region"), 
-                                        int(exp_config_data.get("vector_dimension"))
-                                        )
+            if exp_config_data.get("knowledge_base", False) and not exp_config_data.get("bedrock_knowledge_base", False):
+                embedding_class = embedding_registry.get_model(exp_config_data.get("embedding_model"))
+                embedding = embedding_class(
+                    exp_config_data.get("embedding_model"), 
+                    exp_config_data.get("aws_region"), 
+                    int(exp_config_data.get("vector_dimension")))
+                is_opensearch_required = True
+            else:
+                embedding = None
+                is_opensearch_required = False
             
             inferencer = InferencerProviderFactory.create_inferencer_provider(
                 exp_config_data.get("gateway_enabled", False),
-                exp_config_data.get("gateway_url", ""),
+                f'{exp_config_data.get("gateway_url", "")}/api/openai/v1',
                 exp_config_data.get("gateway_api_key", ""),
-                exp_config_data.get("retrieval_service"),
-                exp_config_data.get("retrieval_model"), 
+                exp_config_data.get("eval_service"),
+                exp_config_data.get("eval_retrieval_model"), 
                 exp_config_data.get("aws_region"), 
                 config.get_sagemaker_arn_role(),
                 int(exp_config_data.get("n_shot_prompts", 0)), 
