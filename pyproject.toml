@@ -11,7 +11,7 @@ authors = [
 ]
 license = { text = "MIT" }
 dependencies = [
-    "FloTorch-core==2.9.4"
+    "FloTorch-core==2.9.3"
 ]
 
 [project.optional-dependencies]
