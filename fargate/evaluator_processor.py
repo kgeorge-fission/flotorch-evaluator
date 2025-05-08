@@ -34,17 +34,11 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
             dynamo_db_question_metrics = DynamoDB(config.get_experiment_question_metrics_table())
             
             metrics_records = dynamo_db_question_metrics.read({"experiment_id": experiment_id})
-            
-            if exp_config_data.get("knowledge_base", False) and not exp_config_data.get("bedrock_knowledge_base", False):
-                embedding_class = embedding_registry.get_model(exp_config_data.get("embedding_model"))
-                embedding = embedding_class(
-                    exp_config_data.get("embedding_model"), 
-                    exp_config_data.get("aws_region"), 
-                    int(exp_config_data.get("vector_dimension")))
-                is_opensearch_required = True
-            else:
-                embedding = None
-                is_opensearch_required = False
+                            
+            embedding_class = embedding_registry.get_model(exp_config_data.get("eval_embedding_model"))
+            embedding = embedding_class(
+                exp_config_data.get("eval_embedding_model"), 
+                exp_config_data.get("aws_region"))
             
             inferencer = InferencerProviderFactory.create_inferencer_provider(
                 exp_config_data.get("gateway_enabled", False),
@@ -69,8 +63,8 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
                 }
             
             evaluator = RagasEvaluator(inferencer, embedding, metric_args=aspect_critic_aspects)
-
-            evaluation_runner = EvaluationRunner(evaluator, metrics_records)
+            metrics_to_evaluate = [MetricKey.ASPECT_CRITIC, MetricKey.ANSWER_RELEVANCE] if not exp_config_data.get("metrics_to_evaluate", None) else None
+            evaluation_runner = EvaluationRunner(evaluator, metrics_records, metrics_to_evaluate)
             experiment_eval_metrics = evaluation_runner.run()
             
             if experiment_eval_metrics:
