@@ -44,12 +44,12 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
                 exp_config_data.get("gateway_enabled", False),
                 f'{exp_config_data.get("gateway_url", "")}/api/openai/v1',
                 exp_config_data.get("gateway_api_key", ""),
-                exp_config_data.get("retrieval_service"),
-                exp_config_data.get("retrieval_model"), 
+                exp_config_data.get("retrieval_service", ""),
+                exp_config_data.get("eval_retrieval_model"), 
                 exp_config_data.get("aws_region"), 
                 config.get_sagemaker_arn_role(),
                 int(exp_config_data.get("n_shot_prompts", 0)), 
-                float(exp_config_data.get("temp_retrieval_llm", 0)), 
+                0.00001, 
                 exp_config_data.get("n_shot_prompt_guide_obj")
                 )
             
