@@ -1,3 +1,4 @@
+from typing import Dict, Optional
 from fargate.base_task_processor import BaseFargateTaskProcessor
 from flotorch_core.storage.db.dynamodb import DynamoDB
 from flotorch_core.config.env_config_provider import EnvConfigProvider
@@ -7,7 +8,8 @@ from flotorch_core.evaluator.metrics.metrics_keys import MetricKey
 from flotorch_core.evaluator.ragas_evaluator import RagasEvaluator
 from evaluator.evaluator import EvaluationRunner
 from flotorch_core.embedding.embedding_registry import embedding_registry
-from flotorch_core.inferencer.inferencer_provider_factory import InferencerProviderFactory
+from flotorch_core.inferencer.bedrock_inferencer import BedrockInferencer
+from flotorch_core.inferencer.gateway_inferencer import GatewayInferencer
 from flotorch_core.embedding.titanv2_embedding import TitanV2Embedding
 from flotorch_core.embedding.titanv1_embedding import TitanV1Embedding
 from flotorch_core.embedding.cohere_embedding import CohereEmbedding
@@ -29,7 +31,7 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
             exp_config_data = self.input_data
             
             experiment_id = exp_config_data.get('experiment_id')
-             
+            n_shot_prompt_guide_obj = get_n_shot_prompt_guide_obj(exp_config_data.get("execution_id"))
             dynamo_db_experiment = DynamoDB(config.get_experiment_table_name())
             dynamo_db_question_metrics = DynamoDB(config.get_experiment_question_metrics_table())
             
@@ -40,18 +42,22 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
                 exp_config_data.get("eval_embedding_model"), 
                 exp_config_data.get("aws_region"))
             
-            inferencer = InferencerProviderFactory.create_inferencer_provider(
-                exp_config_data.get("gateway_enabled", False),
-                f'{exp_config_data.get("gateway_url", "")}/api/openai/v1',
-                exp_config_data.get("gateway_api_key", ""),
-                exp_config_data.get("retrieval_service", ""),
-                exp_config_data.get("eval_retrieval_model"), 
-                exp_config_data.get("aws_region"), 
-                config.get_sagemaker_arn_role(),
-                int(exp_config_data.get("n_shot_prompts", 0)), 
-                0.00001, 
-                exp_config_data.get("n_shot_prompt_guide_obj")
+            if exp_config_data.get("gateway_enabled"):
+                inferencer = GatewayInferencer(
+                    model_id=exp_config_data.get("eval_retrieval_model"),
+                    api_key=exp_config_data.get("gateway_api_key", ""),
+                    base_url=f'{exp_config_data.get("gateway_url", "")}/api/openai/v1',
+                    n_shot_prompts=int(exp_config_data.get("n_shot_prompts", 0)),
+                    n_shot_prompt_guide_obj=n_shot_prompt_guide_obj,
                 )
+            else:
+                inferencer = BedrockInferencer(exp_config_data.get("eval_retrieval_model"),
+                                               exp_config_data.get("aws_region"), 
+                                               int(exp_config_data.get("n_shot_prompts", 0)),
+                                               0.1,
+                                               n_shot_prompt_guide_obj
+                                               ) 
+                
             
             aspect_critic_aspects = {
                 MetricKey.ASPECT_CRITIC: {
@@ -82,3 +88,15 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
         except Exception as e:
             logger.error(f"Error processing evaluator task: {str(e)}")
             raise
+
+# get n shot prompt guide object
+def get_n_shot_prompt_guide_obj(execution_id) -> Optional[Dict]:
+    """
+    Retrieves the n-shot prompt guide object from the dynamo db.
+    """
+    db = DynamoDB(config.get_execution_table_name())
+    data = db.read({"id": execution_id})
+    if data:
+        n_shot_prompt_guide_obj = data[0].get("config", {}).get("n_shot_prompt_guide", None)
+        return n_shot_prompt_guide_obj
+    return None
