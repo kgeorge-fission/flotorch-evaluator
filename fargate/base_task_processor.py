@@ -1,8 +1,7 @@
 import json
+import sys
 from abc import ABC, abstractmethod
-from botocore.exceptions import ClientError
 from flotorch_core.logger.global_logger import get_logger
-import boto3
 
 logger = get_logger()
 
@@ -11,15 +10,15 @@ class BaseFargateTaskProcessor(ABC):
     Abstract base class for Fargate task processors.
     """
 
-    def __init__(self, task_token: str, input_data: dict):
+    def __init__(self, experiment_id: str, execution_id: str):
         """
-        Initializes the task processor with task token and input data.
+        Initializes the task processor with experiment and execution id.
         Args:
-            task_token (str): The Step Functions task token.
-            input_data (dict): The input data for the task.
+            experiment_id (str): The experiment ID.
+            execution_id (str): The execution ID.
         """
-        self.task_token = task_token
-        self.input_data = input_data
+        self.experiment_id = experiment_id
+        self.execution_id = execution_id
 
     @abstractmethod
     def process(self):
@@ -31,18 +30,9 @@ class BaseFargateTaskProcessor(ABC):
     def send_task_success(self, output: dict):
         """
         Sends task success signal to Step Functions.
-        Args:
-            output (dict): The output data to send to Step Functions.
         """
-        try:
-            boto3.client('stepfunctions').send_task_success(
-                taskToken=self.task_token,
-                output=json.dumps(output)
-            )
-            logger.info("Task success sent to Step Functions.")
-        except ClientError as e:
-            logger.error(f"Error sending task success: {str(e)}")
-            raise
+        print(json.dumps(output))
+        sys.exit(0)
 
     def send_task_failure(self, error_message: str):
         """
@@ -50,13 +40,5 @@ class BaseFargateTaskProcessor(ABC):
         Args:
             error_message (str): The error message to send to Step Functions.
         """
-        try:
-            boto3.client('stepfunctions').send_task_failure(
-                taskToken=self.task_token,
-                error='TaskProcessingError',
-                cause=error_message
-            )
-            logger.error("Task failure sent to Step Functions.")
-        except ClientError as e:
-            logger.error(f"Error sending task failure: {str(e)}")
-            raise
+        print(json.dumps({"status": "failure", "output": "Evaluation Failed", "error": error_message}))
+        sys.exit(1)

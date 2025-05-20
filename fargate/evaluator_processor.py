@@ -1,6 +1,7 @@
 from typing import Dict, Optional
 from fargate.base_task_processor import BaseFargateTaskProcessor
 from flotorch_core.storage.db.dynamodb import DynamoDB
+from flotorch_core.storage.db.postgresdb import PostgresDB
 from flotorch_core.config.env_config_provider import EnvConfigProvider
 from flotorch_core.config.config import Config
 from flotorch_core.logger.global_logger import get_logger
@@ -18,7 +19,22 @@ from flotorch_core.embedding.bge_large_embedding import BGELargeEmbedding, BGEM3
 logger = get_logger()
 env_config_provider = EnvConfigProvider()
 config = Config(env_config_provider)
+db_type = config.get_db_type()
 
+def get_experiment_config(execution_id, experiment_id) -> Dict:
+    """
+    Retrieves the experiment configuration from the db.
+    """
+    if db_type == "DYNAMODB":
+        db = DynamoDB(config.get_experiment_table_name())
+    elif db_type == "POSTGRESDB":
+        db = PostgresDB(dbname=config.get_postgres_db(), user=config.get_postgres_user(), password=config.get_postgres_password(), table_name=config.get_experiment_table_name(), host=config.get_postgres_host(), port=config.get_postgres_port())
+    data = db.read({"id": experiment_id, "execution_id": execution_id})
+    if data:
+        experiment_config = data[0].get("config", {}) if isinstance(data, list) else data.get("config", {})
+        return experiment_config
+    return None
+    
 
 class EvaluatorProcessor(BaseFargateTaskProcessor):
     """
@@ -28,15 +44,20 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
     def process(self):
         try:
             logger.info("Starting evaluator process.")
-            exp_config_data = self.input_data
+            execution_id = self.execution_id
+            experiment_id = self.experiment_id
+
+            exp_config_data = get_experiment_config(execution_id, experiment_id)
+            if not exp_config_data:
+                raise ValueError(f"Experiment configuration not found for execution_id: {execution_id} and experiment_id: {experiment_id}")
+            if db_type == "DYNAMODB":
+                db_experiment = DynamoDB(config.get_experiment_table_name())
+                db_question_metrics = DynamoDB(config.get_experiment_question_metrics_table())
+            elif db_type == "POSTGRESDB":
+                db_experiment = PostgresDB(dbname=config.get_postgres_db(), user=config.get_postgres_user(), password=config.get_postgres_password(), table_name=config.get_experiment_table_name(), host=config.get_postgres_host(), port=config.get_postgres_port())
+                db_question_metrics = PostgresDB(dbname=config.get_postgres_db(), user=config.get_postgres_user(), password=config.get_postgres_password(), table_name=config.get_experiment_question_metrics_table(), host=config.get_postgres_host(), port=config.get_postgres_port())
             
-            experiment_id = exp_config_data.get('experiment_id')
-            n_shot_prompt_guide_obj = get_n_shot_prompt_guide_obj(exp_config_data.get("execution_id"))
-            dynamo_db_experiment = DynamoDB(config.get_experiment_table_name())
-            dynamo_db_question_metrics = DynamoDB(config.get_experiment_question_metrics_table())
-            
-            metrics_records = dynamo_db_question_metrics.read({"experiment_id": experiment_id})
-                            
+            metrics_records = db_question_metrics.read({"experiment_id": experiment_id})            
             embedding_class = embedding_registry.get_model(exp_config_data.get("eval_embedding_model"))
             embedding = embedding_class(
                 exp_config_data.get("eval_embedding_model"), 
@@ -48,14 +69,14 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
                     api_key=exp_config_data.get("gateway_api_key", ""),
                     base_url=f'{exp_config_data.get("gateway_url", "")}/api/openai/v1',
                     n_shot_prompts=int(exp_config_data.get("n_shot_prompts", 0)),
-                    n_shot_prompt_guide_obj=n_shot_prompt_guide_obj,
+                    n_shot_prompt_guide_obj=exp_config_data.get("n_shot_prompt_guide", {})
                 )
             else:
                 inferencer = BedrockInferencer(exp_config_data.get("eval_retrieval_model"),
                                                exp_config_data.get("aws_region"), 
                                                int(exp_config_data.get("n_shot_prompts", 0)),
                                                0.1,
-                                               n_shot_prompt_guide_obj
+                                               exp_config_data.get("n_shot_prompt_guide", {})
                                                ) 
                 
             
@@ -76,9 +97,9 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
             if experiment_eval_metrics:
                 logger.info(f"Updating experiment metrics for experiment {experiment_id}")
 
-                # Update the DynamoDB table with the evaluation metrics
+                # Update the DB table with the evaluation metrics
                 update_data = {'eval_metrics': experiment_eval_metrics}
-                dynamo_db_experiment.update(
+                db_experiment.update(
                     key={'id': experiment_id},
                     data=update_data
                     )
@@ -87,16 +108,4 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
             self.send_task_success(output)
         except Exception as e:
             logger.error(f"Error processing evaluator task: {str(e)}")
-            raise
-
-# get n shot prompt guide object
-def get_n_shot_prompt_guide_obj(execution_id) -> Optional[Dict]:
-    """
-    Retrieves the n-shot prompt guide object from the dynamo db.
-    """
-    db = DynamoDB(config.get_execution_table_name())
-    data = db.read({"id": execution_id})
-    if data:
-        n_shot_prompt_guide_obj = data[0].get("config", {}).get("n_shot_prompt_guide", None)
-        return n_shot_prompt_guide_obj
-    return None
+            self.send_task_failure(str(e))
