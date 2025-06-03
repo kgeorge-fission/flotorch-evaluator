@@ -10,7 +10,7 @@ class BaseFargateTaskProcessor(ABC):
     Abstract base class for Fargate task processors.
     """
 
-    def __init__(self, experiment_id: str, execution_id: str):
+    def __init__(self, experiment_id: str, execution_id: str, config_data: dict):
         """
         Initializes the task processor with experiment and execution id.
         Args:
@@ -19,6 +19,7 @@ class BaseFargateTaskProcessor(ABC):
         """
         self.experiment_id = experiment_id
         self.execution_id = execution_id
+        self.config_data = config_data
 
     @abstractmethod
     def process(self):

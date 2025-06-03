@@ -75,10 +75,10 @@ class EvaluationRunner:
         
         metric_records = [
             EvaluationItem(
-                question=record['question'],
-                generated_answer=record['generated_answer'],
-                expected_answer=record['gt_answer'],
-                context=record.get('reference_contexts')
+                question=record.get('question'),
+                generated_answer=record.get('generated_answer'),
+                expected_answer=record.get('gt_answer'),
+                context=record.get('reference_contexts', [])
             ) for record in self.metric_records
             ]
             
