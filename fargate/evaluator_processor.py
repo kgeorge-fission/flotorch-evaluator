@@ -1,5 +1,7 @@
 from typing import List, Dict, Any, Tuple
 import json
+
+import requests
 from fargate.base_task_processor import BaseFargateTaskProcessor
 from flotorch_core.storage.db.dynamodb import DynamoDB
 from flotorch_core.storage.db.postgresdb import PostgresDB
@@ -55,47 +57,45 @@ def read_json_data_by_url(storage_provider, path:str, headers: dict = None) -> d
     return json.loads(data)
 
 
-def get_all_question_metric_records(storage_provider, project_uid: str, experiment_uid: str, base_url: str = None, headers: dict = None) -> list:
-    """
-    Fetches all records from an API that supports pagination.
-
-    Args:
-        storage_provider: The storage provider instance to read data from the API.
-        project_uid: The project ID.
-        experiment_uid: The experiment ID.
-        base_url: The base URL of the API endpoint.
-        headers: Optional headers to include in the request.
-
-    Returns:
-        A list of dictionaries, where each dictionary represents a record.
-    """
+def fetch_all_question_metrics(
+    url: str,
+    project_uid: str,
+    experiment_uid: str,
+    headers: dict = None
+) -> List[Dict]:
     all_records = []
     current_page = 1
     total_records = None
 
     while True:
-        try:
-            url = f"{base_url}?projectUid={project_uid}&experimentUid={experiment_uid}&page={current_page}"
-            data = read_json_data_by_url(storage_provider, url, headers)
-            if not data or "data" not in data or not isinstance(data.get("data"), list):
-                logger.error(f"Warning: Unexpected data structure on page {current_page}. Stopping.")
-                break
-            all_records.extend(data.get("data"))
-            if total_records is None:
-                if "total_record" in data:
-                    total_records = data.get("total_record")
-                else:
-                    print("Warning: 'total_record' not found in the initial response. Assuming single page.")
-                    break
+        params = {
+            "projectUid": project_uid,
+            "experimentUid": experiment_uid,
+            "page": current_page
+        }
 
-            # Check if we have fetched all records
+        try:
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            json_data = response.json()
+
+            if not isinstance(json_data.get("data"), list):
+                raise ValueError(f"Invalid response format on page {current_page}")
+
+            all_records.extend(json_data["data"])
+
+            if total_records is None:
+                total_records = json_data.get("total_record", len(json_data["data"]))
+
             if len(all_records) >= total_records:
                 break
+
             current_page += 1
 
         except Exception as e:
-            print(f"Error fetching data from API: {e}")
+            print(f"Error fetching page {current_page}: {e}")
             break
+
     return all_records
 
 class EvaluatorProcessor(BaseFargateTaskProcessor):
@@ -114,10 +114,21 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
                 config_routes = config_info.get("endpoints", {})
                 config_headers = config_info.get("headers", {})
                 get_config_url = config_base_url + config_routes.get("experiment", "")
-                storage_provider = StorageProviderFactory.create_storage_provider(get_config_url)
-                get_exp_config_data = read_json_data_by_url(storage_provider, get_config_url, config_headers)
-                exp_config_data = get_exp_config_data.get("config", {})
-                metrics_records = get_all_question_metric_records(storage_provider, execution_id, experiment_id, config_base_url + config_routes.get("results", ""), config_headers)
+                config_data = fetch_experiment_config_from_url(
+                    get_config_url,
+                    execution_id,
+                    experiment_id,
+                    config_headers
+                )
+
+                exp_config_data = config_data.get("config", {})
+                exp_config_data["gateway_enabled"] = True
+                exp_config_data["gateway_url"] = config_data.get("gateway", {}).get("url", "")
+                auth_header = config_data.get("gateway", {}).get("headers", {}).get("Authorization", "")
+                token = auth_header.removeprefix("Bearer ").strip()
+                exp_config_data["gateway_api_key"] = token
+
+                metrics_records = fetch_all_question_metrics(f"{config_base_url}{config_routes.get("results", "")}", execution_id, experiment_id, config_headers)
             else:
                 exp_config_data, db_experiment,  db_question_metrics= get_experiment_config(execution_id, experiment_id)
                 metrics_records = db_question_metrics.read({"experiment_id": experiment_id})
@@ -167,19 +178,36 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
                 update_data = {'eval_metrics': experiment_eval_metrics}
                 if self.config_data:
                     payload = format_eval_metrics_to_metric_payloads(update_data)
-                    for record in payload:
-                        storage_provider.write(config_base_url + config_routes.get("metrics", ""), record, config_headers)
+                    end_point = config_routes.get("metrics", "")
+                    eval_metrics_url = f"{config_base_url}{end_point}?projectUid={execution_id}&experimentUid={experiment_id}"
+                    storage_provider = StorageProviderFactory.create_storage_provider(eval_metrics_url)
+                    storage_provider.write(eval_metrics_url, payload, config_headers)
                 else:
                     db_experiment.update(
                         key={'id': experiment_id},
                         data=update_data
-                        )
+                    )
 
             output = {"status": "success", "message": "Evaluator task completed successfully."}
             self.send_task_success(output)
         except Exception as e:
             logger.error(f"Error processing evaluator task: {str(e)}")
             self.send_task_failure(str(e))
+
+def fetch_experiment_config_from_url(
+    url: str,
+    execution_id: str,
+    experiment_id: str,
+    headers: dict
+) -> dict:
+    params = {
+        "projectUid": execution_id,
+        "experimentUid": experiment_id,
+    }
+
+    response = requests.get(url, headers=headers, params=params)
+    response.raise_for_status()  # Raises HTTPError for bad responses
+    return response.json()
 
 def format_eval_metrics_to_metric_payloads(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
@@ -190,8 +218,6 @@ def format_eval_metrics_to_metric_payloads(data: Dict[str, Any]) -> List[Dict[st
         A list of dictionaries, where each dictionary conforms to the MetricPayload interface:
     """
     metric_payloads: List[Dict[str, Any]] = []
-    project_uid = data.get('id')
-    experiment_uid = data.get('execution_id')
     eval_metrics = data.get('eval_metrics', {})
 
     for metric_name, metric_value in eval_metrics.items():
@@ -203,8 +229,6 @@ def format_eval_metrics_to_metric_payloads(data: Dict[str, Any]) -> List[Dict[st
             metric_type = "string"
 
         payload: Dict[str, Any] = {
-            "projectUid": project_uid,
-            "experimentUid": experiment_uid,
             "name": metric_name,
             "type": metric_type,
             "value": str(metric_value)
@@ -212,4 +236,3 @@ def format_eval_metrics_to_metric_payloads(data: Dict[str, Any]) -> List[Dict[st
         metric_payloads.append(payload)
 
     return metric_payloads
-
