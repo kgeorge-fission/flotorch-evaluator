@@ -123,10 +123,19 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
 
                 exp_config_data = config_data.get("config", {})
                 exp_config_data["gateway_enabled"] = True
-                exp_config_data["gateway_url"] = config_data.get("gateway", {}).get("url", "")
-                auth_header = config_data.get("gateway", {}).get("headers", {}).get("Authorization", "")
-                token = auth_header.removeprefix("Bearer ").strip()
-                exp_config_data["gateway_api_key"] = token
+                gateway_data = config_data.get("gateway", {})
+                exp_config_data["gateway_url"] = gateway_data.get("url", "")
+                gateway_headers = gateway_data.get("headers", {})
+                auth_header = gateway_headers.get("Authorization", "")
+                exp_config_data["gateway_api_key"] = auth_header.removeprefix("Bearer ").strip()
+                other_headers = {
+                    k: v for k, v in gateway_headers.items() if k.lower() != "authorization"
+                }
+                exp_config_data["gateway_headers"] = other_headers
+
+                region = self.config_data.get("region")
+                if region:
+                    exp_config_data["aws_region"] = region
 
                 metrics_records = fetch_all_question_metrics(f"{config_base_url}{config_routes.get("results", "")}", execution_id, experiment_id, config_headers)
             else:
@@ -135,10 +144,13 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
             if not exp_config_data:
                 raise ValueError(f"Experiment configuration not found for execution_id: {execution_id} and experiment_id: {experiment_id}")
 
-            embedding_class = embedding_registry.get_model(exp_config_data.get("eval_embedding_model"))
-            embedding = embedding_class(
-                exp_config_data.get("eval_embedding_model"), 
-                exp_config_data.get("aws_region"))
+            if exp_config_data.get("eval_embedding_model"):
+                embedding_class = embedding_registry.get_model(exp_config_data.get("eval_embedding_model"))
+                embedding = embedding_class(
+                    exp_config_data.get("eval_embedding_model"), 
+                    exp_config_data.get("aws_region"))
+            else:
+                embedding = None
             
             if exp_config_data.get("gateway_enabled"):
                 inferencer = GatewayInferencer(
@@ -146,15 +158,16 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
                     api_key=exp_config_data.get("gateway_api_key", ""),
                     base_url=f'{exp_config_data.get("gateway_url", "")}/api/openai/v1',
                     n_shot_prompts=int(exp_config_data.get("n_shot_prompts", 0)),
-                    n_shot_prompt_guide_obj=exp_config_data.get("n_shot_prompt_guide", {})
+                    n_shot_prompt_guide_obj=exp_config_data.get("n_shot_prompt_guide", {}),
+                    headers=exp_config_data.get("gateway_headers", {}),
                 )
             else:
                 inferencer = BedrockInferencer(exp_config_data.get("eval_retrieval_model"),
-                                               exp_config_data.get("aws_region"), 
-                                               int(exp_config_data.get("n_shot_prompts", 0)),
-                                               0.1,
-                                               exp_config_data.get("n_shot_prompt_guide", {})
-                                               ) 
+                    exp_config_data.get("aws_region"), 
+                    int(exp_config_data.get("n_shot_prompts", 0)),
+                    0.1,
+                    exp_config_data.get("n_shot_prompt_guide", {})
+                ) 
                 
             
             aspect_critic_aspects = {
