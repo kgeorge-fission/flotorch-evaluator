@@ -137,7 +137,7 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
                 if region:
                     exp_config_data["aws_region"] = region
 
-                metrics_records = fetch_all_question_metrics(f"{config_base_url}{config_routes.get("results", "")}", execution_id, experiment_id, config_headers)
+                metrics_records = fetch_all_question_metrics(f"{config_base_url}{config_routes.get('results', '')}", execution_id, experiment_id, config_headers)
             else:
                 exp_config_data, db_experiment,  db_question_metrics= get_experiment_config(execution_id, experiment_id)
                 metrics_records = db_question_metrics.read({"experiment_id": experiment_id})
