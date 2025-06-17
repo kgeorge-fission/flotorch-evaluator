@@ -5,7 +5,7 @@ from flotorch_core.config.env_config_provider import EnvConfigProvider
 from flotorch_core.config.config import Config
 from flotorch_core.logger.global_logger import get_logger
 from flotorch_core.evaluator.metrics.metrics_keys import MetricKey
-from flotorch_core.evaluator.ragas_evaluator import RagasEvaluator
+from flotorch_core.evaluator.evaluator_provider_factory import EvaluatorProviderFactory
 from evaluator.evaluator import EvaluationRunner
 from flotorch_core.embedding.embedding_registry import embedding_registry
 from flotorch_core.inferencer.bedrock_inferencer import BedrockInferencer
@@ -36,11 +36,14 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
             dynamo_db_question_metrics = DynamoDB(config.get_experiment_question_metrics_table())
             
             metrics_records = dynamo_db_question_metrics.read({"experiment_id": experiment_id})
-                            
-            embedding_class = embedding_registry.get_model(exp_config_data.get("eval_embedding_model"))
-            embedding = embedding_class(
-                exp_config_data.get("eval_embedding_model"), 
-                exp_config_data.get("aws_region"))
+            eval_service = exp_config_data.get('eval_service')
+            
+            embedding = None
+            if eval_service == 'ragas':
+                embedding_class = embedding_registry.get_model(exp_config_data.get("eval_embedding_model"))
+                embedding = embedding_class(
+                    exp_config_data.get("eval_embedding_model"), 
+                    exp_config_data.get("aws_region"))
             
             if exp_config_data.get("gateway_enabled"):
                 inferencer = GatewayInferencer(
@@ -51,11 +54,11 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
                     n_shot_prompt_guide_obj=n_shot_prompt_guide_obj,
                 )
             else:
-                inferencer = BedrockInferencer(exp_config_data.get("eval_retrieval_model"),
-                                               exp_config_data.get("aws_region"), 
-                                               int(exp_config_data.get("n_shot_prompts", 0)),
-                                               0.1,
-                                               n_shot_prompt_guide_obj
+                inferencer = BedrockInferencer(model_id = exp_config_data.get("eval_retrieval_model"),
+                                               region = exp_config_data.get("aws_region"), 
+                                               n_shot_prompts = int(exp_config_data.get("n_shot_prompts", 0)),
+                                               temperature = 0.1,
+                                               n_shot_prompt_guide_obj = n_shot_prompt_guide_obj,
                                                ) 
                 
             
@@ -68,8 +71,15 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
                     }
                 }
             
-            evaluator = RagasEvaluator(inferencer, embedding, metric_args=aspect_critic_aspects)
-            metrics_to_evaluate = [MetricKey.ASPECT_CRITIC, MetricKey.ANSWER_RELEVANCE] if not exp_config_data.get("knowledge_base", None) else None
+            evaluator = EvaluatorProviderFactory.create_evaluation_provider(
+                eval_service=eval_service,
+                inferencer=inferencer,
+                embedding=embedding,
+                metric_args=aspect_critic_aspects,
+                async_run=False,
+                max_concurrent=1
+            )
+            metrics_to_evaluate = [MetricKey.ASPECT_CRITIC, MetricKey.ANSWER_RELEVANCE] if not exp_config_data.get("knowledge_base", None) and eval_service=='ragas' else None
             evaluation_runner = EvaluationRunner(evaluator, metrics_records, metrics_to_evaluate)
             experiment_eval_metrics = evaluation_runner.run()
             
