@@ -156,7 +156,7 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
                 inferencer = GatewayInferencer(
                     model_id=exp_config_data.get("eval_retrieval_model"),
                     api_key=exp_config_data.get("gateway_api_key", ""),
-                    base_url=f'{exp_config_data.get("gateway_url", "")}/api/openai/v1',
+                    base_url=f'{exp_config_data.get("gateway_url", "")}/openai/v1',
                     n_shot_prompts=int(exp_config_data.get("n_shot_prompts", 0)),
                     n_shot_prompt_guide_obj=exp_config_data.get("n_shot_prompt_guide", {}),
                     headers=exp_config_data.get("gateway_headers", {}),
