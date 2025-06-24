@@ -180,7 +180,7 @@ class EvaluatorProcessor(BaseFargateTaskProcessor):
                 }
             
             evaluator = RagasEvaluator(inferencer, embedding, metric_args=aspect_critic_aspects)
-            metrics_to_evaluate = [MetricKey.ASPECT_CRITIC, MetricKey.ANSWER_RELEVANCE] if not exp_config_data.get("knowledge_base", None) else None
+            metrics_to_evaluate = [MetricKey.ASPECT_CRITIC, MetricKey.ANSWER_RELEVANCE] if not exp_config_data.get("vectorstore", None) else None
             evaluation_runner = EvaluationRunner(evaluator, metrics_records, metrics_to_evaluate)
             experiment_eval_metrics = evaluation_runner.run()
             
