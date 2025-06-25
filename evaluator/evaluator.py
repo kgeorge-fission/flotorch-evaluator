@@ -78,9 +78,7 @@ class EvaluationRunner:
                 question=record.get('question'),
                 generated_answer=record.get('generated_answer'),
                 expected_answer=record.get('gt_answer'),
-                context=[
-                    ctx.get('content', '') for ctx in record.get('retrieval_context', [])
-                    ]
+                context=record.get('retrieval_contexts', [])
             ) for record in self.metric_records
             ]
             
