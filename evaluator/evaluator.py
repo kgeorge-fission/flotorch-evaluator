@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, List, Dict, Union
 from flotorch_core.evaluator.evaluation_item import EvaluationItem
+from deepeval.evaluate.types import EvaluationResult as DeepevalEvaluationResult
+from ragas.dataset_schema import EvaluationResult as RagasEvaluationResult
 
 @dataclass
 class EvaluationMetrics():
@@ -13,18 +15,21 @@ class EvaluationMetrics():
     string_similarity: Optional[float] = 0.0
     context_recall: Optional[float] = 0.0
     rouge_score: Optional[float] = 0.0
+    context_relevancy: Optional[float] = 0.0
+    hallucination: Optional[float] = 0.0
 
 
     def from_dict(self, metrics_dict: Dict[str, str]) -> 'EvaluationMetrics':
         """Convert metrics from DynamoDB format to EvaluationMetrics"""
         return EvaluationMetrics(
             faithfulness_score=float(metrics_dict.get('faithfulness', '0.0')),
-            context_precision_score=float(metrics_dict.get('llm_context_precision_with_reference', '0.0')),
-            aspect_critic_score=float(metrics_dict.get('maliciousness', '0.0')),
+            context_precision_score=float(metrics_dict.get('llm_context_precision_with_reference', metrics_dict.get('contextual_precision', '0.0'))),            aspect_critic_score=float(metrics_dict.get('maliciousness', '0.0')),
             answers_relevancy_score=float(metrics_dict.get('answer_relevancy', '0.0')),
             string_similarity=float(metrics_dict.get('String_Similarity', '0.0')),
-            context_recall=float(metrics_dict.get('Context_Recall', '0.0')),
-            rouge_score=float(metrics_dict.get('Rouge_Score', '0.0'))
+            context_recall=float(metrics_dict.get('Context_Recall', metrics_dict.get('contextual_recall', '0.0'))),
+            rouge_score=float(metrics_dict.get('Rouge_Score', '0.0')),
+            context_relevancy=float(metrics_dict.get('contextual_relevancy', '0.0')),
+            hallucination=float(metrics_dict.get('hallucination', '0.0'))
         )
 
     def to_dict(self) -> Dict[str, str]:
@@ -35,7 +40,9 @@ class EvaluationMetrics():
             'answers_relevancy_score': str(self.answers_relevancy_score),
             'string_similarity_score': str(self.string_similarity),
             'context_recall_score': str(self.context_recall),
-            'rouge_score': str(self.rouge_score)
+            'rouge_score': str(self.rouge_score),
+            'context_relevancy': str(self.context_relevancy),
+            'hallucination': str(self.hallucination)
         }
     
     def to_dynamo_format(self) -> dict:
@@ -82,12 +89,25 @@ class EvaluationRunner:
             ) for record in self.metric_records
             ]
             
-        metrics = self.evaluator.evaluate(metric_records, self.metrics)
+        results = self.evaluator.evaluate(metric_records, self.metrics)
         
         experiment_eval_metrics = {}
-        if metrics:
-            experiment_eval_metrics = metrics._repr_dict
+        if not results:
+            return experiment_eval_metrics
+
+        if isinstance(results, RagasEvaluationResult):
+            experiment_eval_metrics = results._repr_dict
+
+        elif isinstance(results, DeepevalEvaluationResult):
+            for test_result in results.test_results:
+                if hasattr(test_result, 'metrics_data'):
+                    for metric_data in test_result.metrics_data:
+                        metric_key = metric_data.name.lower().replace(' ', '_')
+                        score = metric_data.score
+                        experiment_eval_metrics[metric_key] = float('nan') if score is None else score
+
+        if experiment_eval_metrics:
             experiment_eval_metrics = {key: round(value, 2) if isinstance(value, float) else value for key, value in experiment_eval_metrics.items()}        
             experiment_eval_metrics = EvaluationMetrics().from_dict(experiment_eval_metrics).to_dict()
-            
+
         return experiment_eval_metrics
